@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "api/index.py"
+    }
+  ],
+  "env": {
+    "DATABASE_URL": "sqlite:///./urban_cooling.db",
+    "CLIMATE_API_BASE_URL": "https://climate.gg.go.kr/ols/api/geoserver/wfs",
+    "CLIMATE_API_KEY": "***REMOVED***",
+    "USE_MOCK_DATA": "False"
+  }
+}
