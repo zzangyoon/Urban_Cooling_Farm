@@ -9,14 +9,7 @@ import folium
 from streamlit_folium import st_folium
 import pandas as pd
 from datetime import datetime
-import sys
-import os
-import asyncio
-
-# 프로젝트 루트를 path에 추가
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from app.services.climate_service import ClimateService, DISTRICT_LIST, GYEONGGI_DISTRICTS
+import httpx
 
 # ============== Page Config ==============
 st.set_page_config(
@@ -53,33 +46,125 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ============== Initialize Services ==============
-@st.cache_resource
-def get_climate_service():
-    return ClimateService()
+# ============== 경기도 시군구 정보 ==============
+GYEONGGI_DISTRICTS = [
+    {"district": "수원시", "lat": 37.2636, "lng": 127.0286, "population_density": 9800},
+    {"district": "성남시", "lat": 37.4200, "lng": 127.1265, "population_density": 9200},
+    {"district": "고양시", "lat": 37.6584, "lng": 126.8320, "population_density": 7500},
+    {"district": "용인시", "lat": 37.2410, "lng": 127.1775, "population_density": 3200},
+    {"district": "부천시", "lat": 37.5034, "lng": 126.7660, "population_density": 15800},
+    {"district": "안산시", "lat": 37.3219, "lng": 126.8309, "population_density": 8100},
+    {"district": "안양시", "lat": 37.3943, "lng": 126.9568, "population_density": 11200},
+    {"district": "평택시", "lat": 36.9921, "lng": 127.1128, "population_density": 1800},
+    {"district": "시흥시", "lat": 37.3800, "lng": 126.8030, "population_density": 5500},
+    {"district": "화성시", "lat": 37.1996, "lng": 126.8312, "population_density": 1500},
+    {"district": "광명시", "lat": 37.4786, "lng": 126.8644, "population_density": 17500},
+    {"district": "군포시", "lat": 37.3616, "lng": 126.9351, "population_density": 11000},
+    {"district": "광주시", "lat": 37.4095, "lng": 127.2550, "population_density": 1800},
+    {"district": "김포시", "lat": 37.6152, "lng": 126.7156, "population_density": 2800},
+    {"district": "파주시", "lat": 37.7126, "lng": 126.7800, "population_density": 800},
+]
+
+DISTRICT_LIST = [d["district"] for d in GYEONGGI_DISTRICTS]
 
 
-climate_service = get_climate_service()
+# ============== API 설정 ==============
+REMOVED = "REMOVED"
+API_BASE_URL = "https://climate.gg.go.kr/ols/api/geoserver/wfs"
 
 
-# ============== Async Helper ==============
-def run_async(coro):
-    """비동기 함수 실행 헬퍼"""
+# ============== 데이터 로딩 함수 ==============
+@st.cache_data(ttl=300)
+def fetch_park_data(max_features: int = 200) -> list:
+    """경기기후플랫폼에서 공원 데이터 조회"""
     try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+        params = {
+            "apiKey": REMOVED,
+            "service": "WFS",
+            "version": "1.1.0",
+            "request": "GetFeature",
+            "typeName": "park",
+            "outputFormat": "application/json",
+            "maxFeatures": max_features
+        }
+
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(API_BASE_URL, params=params)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("features", [])
+    except Exception as e:
+        st.warning(f"API 호출 실패: {e}")
+        return []
 
 
-# ============== Data Loading with Cache ==============
-@st.cache_data(ttl=300)  # 5분 캐시
-def load_heat_island_data(_climate_service, district: str = None):
-    """열섬 데이터 로드 (캐시됨)"""
-    data = run_async(_climate_service.get_heat_island_data(district))
-    # Pydantic 모델을 딕셔너리로 변환하여 캐시 가능하게
-    return [d.model_dump() for d in data]
+@st.cache_data(ttl=300)
+def calculate_heat_island_data(district_filter: str = None) -> list:
+    """열섬 데이터 계산 (공원 데이터 + 인구밀도 기반)"""
+
+    # 공원 데이터로 시군구별 녹지율 계산
+    parks = fetch_park_data(500)
+
+    district_park_area = {}
+    for feature in parks:
+        props = feature.get("properties", {})
+        sgg_nm = props.get("sgg_nm", "")
+        area = props.get("biotop_area") or props.get("area") or 10000
+
+        if sgg_nm:
+            # 시군구명 정규화 (예: "수원시 팔달구" -> "수원시")
+            for d in GYEONGGI_DISTRICTS:
+                if d["district"] in sgg_nm or sgg_nm in d["district"]:
+                    district_park_area[d["district"]] = district_park_area.get(d["district"], 0) + float(area)
+                    break
+
+    # 녹지율 계산 (추정)
+    avg_district_area = 40_000_000  # m² (시군구 평균 면적)
+    district_green_ratio = {}
+    for district, total_area in district_park_area.items():
+        green_ratio = (total_area / avg_district_area) * 100
+        district_green_ratio[district] = min(max(green_ratio, 5.0), 40.0)
+
+    # 열섬 데이터 생성
+    result = []
+    base_temp = 28.0
+
+    districts = GYEONGGI_DISTRICTS
+    if district_filter:
+        districts = [d for d in districts if district_filter in d["district"]]
+
+    for d in districts:
+        district_name = d["district"]
+        pop_density = d["population_density"]
+
+        # 녹지율 (없으면 인구밀도 기반 추정)
+        if district_name in district_green_ratio:
+            green_ratio = district_green_ratio[district_name]
+        else:
+            green_ratio = max(5, 40 - (pop_density / 500))
+
+        # 열섬 강도 계산
+        green_factor = (30 - green_ratio) / 30  # 0 ~ 1
+        density_factor = min(pop_density / 20000, 1.0)  # 0 ~ 1
+
+        intensity = 0.5 + (green_factor * 1.5) + (density_factor * 1.0)
+        intensity = round(min(max(intensity, 0.5), 3.0), 2)
+
+        temperature = base_temp + intensity
+
+        result.append({
+            "latitude": d["lat"],
+            "longitude": d["lng"],
+            "temperature": round(temperature, 1),
+            "heat_island_intensity": intensity,
+            "timestamp": datetime.now().isoformat(),
+            "district": district_name,
+            "green_coverage_ratio": round(green_ratio, 1)
+        })
+
+    # 강도 높은 순 정렬
+    result.sort(key=lambda x: x["heat_island_intensity"], reverse=True)
+    return result
 
 
 # ============== Helper Functions ==============
@@ -117,32 +202,19 @@ def create_heat_island_map(heat_data: list, center: tuple = (37.4, 127.0)) -> fo
 
     # 열섬 포인트 추가
     for data in heat_data:
-        # dict 형식 지원
-        if isinstance(data, dict):
-            lat = data["latitude"]
-            lng = data["longitude"]
-            intensity = data["heat_island_intensity"]
-            temp = data["temperature"]
-            district = data["district"]
-            timestamp = data["timestamp"]
-            green_ratio = data.get("green_coverage_ratio")
-        else:
-            lat = data.latitude
-            lng = data.longitude
-            intensity = data.heat_island_intensity
-            temp = data.temperature
-            district = data.district
-            timestamp = data.timestamp
-            green_ratio = getattr(data, "green_coverage_ratio", None)
+        lat = data["latitude"]
+        lng = data["longitude"]
+        intensity = data["heat_island_intensity"]
+        temp = data["temperature"]
+        district = data["district"]
+        timestamp = data["timestamp"]
+        green_ratio = data.get("green_coverage_ratio")
 
         color = get_heat_color(intensity)
         level = get_heat_level(intensity)
 
         # 타임스탬프 포맷팅
-        if isinstance(timestamp, str):
-            ts_str = timestamp[:16].replace("T", " ")
-        else:
-            ts_str = timestamp.strftime('%Y-%m-%d %H:%M')
+        ts_str = timestamp[:16].replace("T", " ") if isinstance(timestamp, str) else timestamp.strftime('%Y-%m-%d %H:%M')
 
         green_info = f"<p style='margin: 5px 0;'><b>녹지율:</b> {green_ratio:.1f}%</p>" if green_ratio else ""
 
@@ -236,7 +308,7 @@ if page == "🗺️ 열섬 현황 지도":
 
     # 데이터 로드 (캐시됨)
     district_param = None if district_filter == "전체" else district_filter
-    heat_data = load_heat_island_data(climate_service, district_param)
+    heat_data = calculate_heat_island_data(district_param)
 
     # 강도 필터 적용
     heat_data = [d for d in heat_data if d["heat_island_intensity"] >= intensity_filter]
@@ -362,7 +434,7 @@ elif page == "📊 대시보드":
     with col_right:
         st.subheader("🌡️ 지역별 열섬 강도")
         # 캐시된 데이터 사용
-        heat_data = load_heat_island_data(climate_service, None)
+        heat_data = calculate_heat_island_data(None)
         intensity_df = pd.DataFrame({
             "지역": [d["district"] for d in heat_data],
             "강도": [d["heat_island_intensity"] for d in heat_data]
