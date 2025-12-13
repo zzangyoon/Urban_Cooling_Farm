@@ -11,11 +11,12 @@ import pandas as pd
 from datetime import datetime
 import sys
 import os
+import asyncio
 
 # 프로젝트 루트를 path에 추가
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.services.climate_service import ClimateService, MOCK_HEAT_ISLAND_LOCATIONS
+from app.services.climate_service import ClimateService, DISTRICT_LIST, GYEONGGI_DISTRICTS
 
 # ============== Page Config ==============
 st.set_page_config(
@@ -61,6 +62,26 @@ def get_climate_service():
 climate_service = get_climate_service()
 
 
+# ============== Async Helper ==============
+def run_async(coro):
+    """비동기 함수 실행 헬퍼"""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
+
+# ============== Data Loading with Cache ==============
+@st.cache_data(ttl=300)  # 5분 캐시
+def load_heat_island_data(_climate_service, district: str = None):
+    """열섬 데이터 로드 (캐시됨)"""
+    data = run_async(_climate_service.get_heat_island_data(district))
+    # Pydantic 모델을 딕셔너리로 변환하여 캐시 가능하게
+    return [d.model_dump() for d in data]
+
+
 # ============== Helper Functions ==============
 def get_heat_color(intensity: float) -> str:
     """열섬 강도에 따른 색상 반환"""
@@ -96,32 +117,59 @@ def create_heat_island_map(heat_data: list, center: tuple = (37.4, 127.0)) -> fo
 
     # 열섬 포인트 추가
     for data in heat_data:
-        color = get_heat_color(data.heat_island_intensity)
-        level = get_heat_level(data.heat_island_intensity)
+        # dict 형식 지원
+        if isinstance(data, dict):
+            lat = data["latitude"]
+            lng = data["longitude"]
+            intensity = data["heat_island_intensity"]
+            temp = data["temperature"]
+            district = data["district"]
+            timestamp = data["timestamp"]
+            green_ratio = data.get("green_coverage_ratio")
+        else:
+            lat = data.latitude
+            lng = data.longitude
+            intensity = data.heat_island_intensity
+            temp = data.temperature
+            district = data.district
+            timestamp = data.timestamp
+            green_ratio = getattr(data, "green_coverage_ratio", None)
+
+        color = get_heat_color(intensity)
+        level = get_heat_level(intensity)
+
+        # 타임스탬프 포맷팅
+        if isinstance(timestamp, str):
+            ts_str = timestamp[:16].replace("T", " ")
+        else:
+            ts_str = timestamp.strftime('%Y-%m-%d %H:%M')
+
+        green_info = f"<p style='margin: 5px 0;'><b>녹지율:</b> {green_ratio:.1f}%</p>" if green_ratio else ""
 
         popup_html = f"""
         <div style="width: 200px;">
-            <h4 style="margin: 0; color: #333;">{data.district}</h4>
+            <h4 style="margin: 0; color: #333;">{district}</h4>
             <hr style="margin: 5px 0;">
-            <p style="margin: 5px 0;"><b>현재 온도:</b> {data.temperature}°C</p>
-            <p style="margin: 5px 0;"><b>열섬 강도:</b> +{data.heat_island_intensity}°C</p>
+            <p style="margin: 5px 0;"><b>현재 온도:</b> {temp}°C</p>
+            <p style="margin: 5px 0;"><b>열섬 강도:</b> +{intensity}°C</p>
             <p style="margin: 5px 0;"><b>위험 수준:</b> <span style="color: {color};">{level}</span></p>
+            {green_info}
             <p style="margin: 5px 0; font-size: 0.8em; color: #666;">
-                측정: {data.timestamp.strftime('%Y-%m-%d %H:%M')}
+                측정: {ts_str}
             </p>
         </div>
         """
 
         # 원형 마커 (열섬 강도에 비례하는 크기)
         folium.CircleMarker(
-            location=[data.latitude, data.longitude],
-            radius=10 + data.heat_island_intensity * 5,
+            location=[lat, lng],
+            radius=10 + intensity * 5,
             color=color,
             fill=True,
             fillColor=color,
             fillOpacity=0.6,
             popup=folium.Popup(popup_html, max_width=250),
-            tooltip=f"{data.district}: +{data.heat_island_intensity}°C"
+            tooltip=f"{district}: +{intensity}°C"
         ).add_to(m)
 
     # 범례 추가
@@ -160,7 +208,7 @@ with st.sidebar:
     st.subheader("필터")
     district_filter = st.selectbox(
         "지역 선택",
-        ["전체"] + [loc["district"] for loc in MOCK_HEAT_ISLAND_LOCATIONS]
+        ["전체"] + DISTRICT_LIST
     )
 
     intensity_filter = st.slider(
@@ -172,6 +220,12 @@ with st.sidebar:
     )
 
     st.markdown("---")
+
+    # 데이터 새로고침 버튼
+    if st.button("🔄 데이터 새로고침"):
+        st.cache_data.clear()
+        st.rerun()
+
     st.caption(f"마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
 
@@ -180,17 +234,12 @@ if page == "🗺️ 열섬 현황 지도":
     st.markdown('<p class="main-header">🌡️ 경기도 열섬 현황 지도</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">실시간 도시 열섬 모니터링 및 냉각 우선지역 분석</p>', unsafe_allow_html=True)
 
-    # 데이터 로드
+    # 데이터 로드 (캐시됨)
     district_param = None if district_filter == "전체" else district_filter
-
-    # 동기 함수로 Mock 데이터 직접 호출
-    if district_param:
-        heat_data = climate_service._generate_mock_heat_island_data(district_param)
-    else:
-        heat_data = climate_service._generate_mock_heat_island_data(None)
+    heat_data = load_heat_island_data(climate_service, district_param)
 
     # 강도 필터 적용
-    heat_data = [d for d in heat_data if d.heat_island_intensity >= intensity_filter]
+    heat_data = [d for d in heat_data if d["heat_island_intensity"] >= intensity_filter]
 
     # 상단 메트릭
     col1, col2, col3, col4 = st.columns(4)
@@ -204,18 +253,19 @@ if page == "🗺️ 열섬 현황 지도":
 
     with col2:
         if heat_data:
-            avg_temp = sum(d.temperature for d in heat_data) / len(heat_data)
+            avg_temp = sum(d["temperature"] for d in heat_data) / len(heat_data)
+            avg_intensity = sum(d["heat_island_intensity"] for d in heat_data) / len(heat_data)
             st.metric(
                 label="평균 온도",
                 value=f"{avg_temp:.1f}°C",
-                delta=f"+{sum(d.heat_island_intensity for d in heat_data) / len(heat_data):.1f}°C"
+                delta=f"+{avg_intensity:.1f}°C"
             )
         else:
             st.metric(label="평균 온도", value="N/A")
 
     with col3:
         if heat_data:
-            max_intensity = max(d.heat_island_intensity for d in heat_data)
+            max_intensity = max(d["heat_island_intensity"] for d in heat_data)
             st.metric(
                 label="최대 열섬 강도",
                 value=f"+{max_intensity:.1f}°C",
@@ -225,7 +275,7 @@ if page == "🗺️ 열섬 현황 지도":
             st.metric(label="최대 열섬 강도", value="N/A")
 
     with col4:
-        critical_count = len([d for d in heat_data if d.heat_island_intensity >= 2.0])
+        critical_count = len([d for d in heat_data if d["heat_island_intensity"] >= 2.0])
         st.metric(
             label="심각 지역",
             value=f"{critical_count}개",
@@ -237,11 +287,19 @@ if page == "🗺️ 열섬 현황 지도":
     # 지도 표시
     if heat_data:
         # 중심점 계산
-        center_lat = sum(d.latitude for d in heat_data) / len(heat_data)
-        center_lng = sum(d.longitude for d in heat_data) / len(heat_data)
+        center_lat = sum(d["latitude"] for d in heat_data) / len(heat_data)
+        center_lng = sum(d["longitude"] for d in heat_data) / len(heat_data)
 
         heat_map = create_heat_island_map(heat_data, center=(center_lat, center_lng))
-        st_folium(heat_map, width=None, height=500, use_container_width=True)
+
+        # returned_objects=[] 로 지도 상호작용으로 인한 rerun 방지
+        st_folium(
+            heat_map,
+            width=None,
+            height=500,
+            use_container_width=True,
+            returned_objects=[]
+        )
     else:
         st.warning("선택한 조건에 맞는 데이터가 없습니다.")
 
@@ -251,13 +309,13 @@ if page == "🗺️ 열섬 현황 지도":
     if heat_data:
         df = pd.DataFrame([
             {
-                "지역": d.district,
-                "위도": round(d.latitude, 4),
-                "경도": round(d.longitude, 4),
-                "온도 (°C)": d.temperature,
-                "열섬 강도 (°C)": f"+{d.heat_island_intensity}",
-                "위험 수준": get_heat_level(d.heat_island_intensity),
-                "측정 시간": d.timestamp.strftime('%H:%M')
+                "지역": d["district"],
+                "위도": round(d["latitude"], 4),
+                "경도": round(d["longitude"], 4),
+                "온도 (°C)": d["temperature"],
+                "열섬 강도 (°C)": f"+{d['heat_island_intensity']}",
+                "녹지율 (%)": f"{d.get('green_coverage_ratio', 'N/A')}",
+                "위험 수준": get_heat_level(d["heat_island_intensity"]),
             }
             for d in heat_data
         ])
@@ -303,10 +361,11 @@ elif page == "📊 대시보드":
 
     with col_right:
         st.subheader("🌡️ 지역별 열섬 강도")
-        heat_data = climate_service._generate_mock_heat_island_data(None)
+        # 캐시된 데이터 사용
+        heat_data = load_heat_island_data(climate_service, None)
         intensity_df = pd.DataFrame({
-            "지역": [d.district.split()[0] for d in heat_data],
-            "강도": [d.heat_island_intensity for d in heat_data]
+            "지역": [d["district"] for d in heat_data],
+            "강도": [d["heat_island_intensity"] for d in heat_data]
         })
         st.bar_chart(intensity_df.set_index("지역"))
 
@@ -342,14 +401,14 @@ elif page == "🎯 미션 현황":
     mock_missions = [
         {
             "id": 1,
-            "title": "수원시 팔달구 가로수 심기",
+            "title": "수원시 가로수 심기",
             "type": "나무 심기",
             "status": "대기중",
-            "location": "수원시 팔달구",
+            "location": "수원시",
             "points": 50,
             "difficulty": 2,
             "cooling_effect": 0.3,
-            "ai_reason": "해당 지역은 열섬 강도 2.5°C로 경기도 내 최고 수준입니다. 가로수 식재를 통해 그늘 제공 및 증발산 효과를 기대할 수 있습니다."
+            "ai_reason": "해당 지역은 열섬 강도가 높고 녹지율이 낮습니다. 가로수 식재를 통해 그늘 제공 및 증발산 효과를 기대할 수 있습니다."
         },
         {
             "id": 2,
@@ -378,7 +437,7 @@ elif page == "🎯 미션 현황":
             "title": "성남시 분당구 분수대 설치",
             "type": "수경시설",
             "status": "완료",
-            "location": "성남시 분당구",
+            "location": "성남시",
             "points": 70,
             "difficulty": 3,
             "cooling_effect": 0.2,
@@ -389,11 +448,22 @@ elif page == "🎯 미션 현황":
             "title": "안양시 버스정류장 그늘막",
             "type": "그늘막 설치",
             "status": "진행중",
-            "location": "안양시 만안구",
+            "location": "안양시",
             "points": 30,
             "difficulty": 1,
             "cooling_effect": 0.1,
             "ai_reason": "안양역 인근 버스정류장의 대기 시민들이 직사광선에 노출되어 있습니다. 그늘막 설치로 체감온도를 3°C 이상 낮출 수 있습니다."
+        },
+        {
+            "id": 6,
+            "title": "광명시 도심 녹지 조성",
+            "type": "나무 심기",
+            "status": "대기중",
+            "location": "광명시",
+            "points": 80,
+            "difficulty": 3,
+            "cooling_effect": 0.4,
+            "ai_reason": "광명시는 경기도 내 가장 높은 인구밀도를 보이며 녹지율이 부족합니다. 도심 녹지 조성이 시급합니다."
         }
     ]
 
@@ -437,7 +507,7 @@ elif page == "ℹ️ 정보":
     **Urban Cooling Farm**은 AI 기반 도시 열섬 완화 시스템입니다.
 
     ### 주요 기능
-    - 🌡️ **실시간 열섬 모니터링**: 경기기후플랫폼 연동
+    - 🌡️ **실시간 열섬 모니터링**: 경기기후플랫폼 API 연동
     - 🤖 **AI 미션 생성**: 냉각 효과 최대화를 위한 자동 미션 생성
     - 🗺️ **지도 시각화**: Folium 기반 열섬 현황 지도
     - 📊 **효과 측정**: 쿨링팜 설치 전후 효과 분석
@@ -448,6 +518,12 @@ elif page == "ℹ️ 정보":
     - 콘크리트, 아스팔트 등 인공 구조물의 열 흡수
     - 녹지 공간 부족
     - 에어컨 등 인공 열원
+
+    ### 열섬 강도 계산 방식
+    본 시스템은 경기기후플랫폼의 **공원 데이터**를 활용하여 열섬 취약 지역을 분석합니다:
+    - **녹지율**: 공원 면적 기반 녹지 비율 계산
+    - **인구밀도**: 밀집 지역일수록 열섬 강도 증가
+    - **열섬 강도** = 기본값 + (녹지 부족 요인) + (인구밀도 요인)
 
     ### 냉각 솔루션
     | 솔루션 | 냉각 효과 | 설명 |
@@ -462,7 +538,11 @@ elif page == "ℹ️ 정보":
     ### 기술 스택
     - **Backend**: FastAPI, SQLAlchemy
     - **Frontend**: Streamlit, Folium
-    - **Data**: 경기기후플랫폼 API
+    - **Data**: 경기기후플랫폼 WFS API (park 레이어)
+
+    ### 데이터 출처
+    - 경기기후플랫폼 (https://climate.gg.go.kr)
+    - 공원현황도 레이어 활용
     """)
 
     st.markdown("---")
