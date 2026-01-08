@@ -10,6 +10,11 @@ from streamlit_folium import st_folium
 import pandas as pd
 from datetime import datetime
 import httpx
+import os
+from dotenv import load_dotenv
+
+# .env 파일 로드
+load_dotenv()
 
 # ============== Page Config ==============
 st.set_page_config(
@@ -69,8 +74,8 @@ DISTRICT_LIST = [d["district"] for d in GYEONGGI_DISTRICTS]
 
 
 # ============== API 설정 ==============
-API_KEY = "***REMOVED***"
-API_BASE_URL = "https://climate.gg.go.kr/ols/api/geoserver/wfs"
+API_KEY = os.getenv("CLIMATE_API_KEY", "")
+API_BASE_URL = os.getenv("CLIMATE_API_BASE_URL", "https://climate.gg.go.kr/ols/api/geoserver/wfs")
 
 
 # ============== 데이터 로딩 함수 ==============
