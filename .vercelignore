@@ -1,8 +1,35 @@
+# Python virtual environment
 .venv
+venv/
 __pycache__
 *.pyc
+*.pyo
+*.pyd
+
+# Environment files
 .env
+.env.local
+
+# Git
 .git
-streamlit_app
+.gitignore
+
+# Streamlit app (not needed in Vercel)
+streamlit_app/
+
+# Database files
 *.db
+*.sqlite3
+
+# Testing
 .pytest_cache
+.coverage
+
+# Lock files - force Vercel to use requirements.txt
+uv.lock
+pyproject.toml
+
+# Documentation (reduce size)
+*.md
+CLAUDE.md
+PROJECT_REPORT.md
