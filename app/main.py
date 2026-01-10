@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from app.config import get_settings
 from app.models.database import Base, engine
 from app.routers import climate_router, missions_router, cooling_spots_router, agent_router, effects_router
+from app.routers.citizen import router as citizen_router
 
 
 @asynccontextmanager
@@ -46,6 +47,7 @@ app.include_router(missions_router)
 app.include_router(cooling_spots_router)
 app.include_router(agent_router)
 app.include_router(effects_router)
+app.include_router(citizen_router)
 
 
 @app.get("/")

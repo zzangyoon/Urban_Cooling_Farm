@@ -185,8 +185,8 @@ if time_series:
 
 st.markdown("---")
 
-# ============== Before/After Comparison ==============
-st.subheader("📉 설치 전후 비교")
+# ============== Before/After Comparison (개선) ==============
+st.subheader("📉 설치 전후 비교 (통계 검증)")
 
 comparison_data = effect_service.get_before_after_comparison(cooling_spot_id=1)
 
@@ -203,34 +203,65 @@ with col1:
         for c in comparison_data
     ])
 
-    fig_comp = go.Figure()
+    # Paired t-test용 데이터 (최소 14일 필요)
+    if len(df_comp) >= 2:  # 주별 데이터이므로 2주 = 14일
+        from scipy import stats as scipy_stats
 
-    fig_comp.add_trace(go.Bar(
-        name='설치 전',
-        x=df_comp['기간'],
-        y=df_comp['설치 전'],
-        marker_color='#ff6b6b'
-    ))
+        t_stat, p_value = scipy_stats.ttest_rel(
+            df_comp['설치 전'],
+            df_comp['설치 후']
+        )
 
-    fig_comp.add_trace(go.Bar(
-        name='설치 후',
-        x=df_comp['기간'],
-        y=df_comp['설치 후'],
-        marker_color='#4ecdc4'
-    ))
+        is_significant = p_value < 0.05
 
-    fig_comp.update_layout(
-        title="주별 평균 온도 비교",
-        barmode='group',
-        height=350,
-        yaxis_title="온도 (°C)"
-    )
+        # 차트에 신뢰구간 추가
+        fig_comp = go.Figure()
 
-    st.plotly_chart(fig_comp, use_container_width=True)
+        fig_comp.add_trace(go.Bar(
+            name='설치 전',
+            x=df_comp['기간'],
+            y=df_comp['설치 전'],
+            marker_color='#ff6b6b',
+            error_y=dict(
+                type='data',
+                array=[0.3] * len(df_comp),  # ±0.3°C 측정 오차
+                visible=True
+            )
+        ))
+
+        fig_comp.add_trace(go.Bar(
+            name='설치 후',
+            x=df_comp['기간'],
+            y=df_comp['설치 후'],
+            marker_color='#4ecdc4',
+            error_y=dict(
+                type='data',
+                array=[0.3] * len(df_comp),
+                visible=True
+            )
+        ))
+
+        fig_comp.update_layout(
+            title=f"주별 평균 온도 비교 (paired t-test p={p_value:.4f})",
+            barmode='group',
+            height=350,
+            yaxis_title="온도 (°C)"
+        )
+
+        st.plotly_chart(fig_comp, use_container_width=True)
+
+        # 통계적 유의성 안내
+        if is_significant:
+            st.success(f"✅ 통계적으로 유의미한 냉각 효과 (p < 0.05, t={t_stat:.2f})")
+        else:
+            st.warning(f"⚠️ 통계적 유의성 부족 (p = {p_value:.3f}). 더 많은 데이터 필요")
+            st.caption("📌 참고: 최소 14일(2주) 이상 데이터가 필요합니다.")
+    else:
+        st.info("ℹ️ 통계 검증을 위해 최소 2주 이상의 데이터가 필요합니다.")
 
 with col2:
     # 개선율 게이지
-    avg_improvement = sum(c.improvement_percent for c in comparison_data) / len(comparison_data)
+    avg_improvement = sum(c.improvement_percent for c in comparison_data) / len(comparison_data) if comparison_data else 0
 
     fig_gauge = go.Figure(go.Indicator(
         mode="gauge+number+delta",
@@ -300,6 +331,119 @@ with col2:
         use_container_width=True,
         hide_index=True
     )
+
+st.markdown("---")
+
+# ============== Uncertainty Visualization ==============
+st.subheader("📊 냉각 효과 예측 범위 (불확실성 표시)")
+
+st.caption("각 미션 타입의 최소/평균/최대 냉각 효과를 범위로 표시합니다.")
+
+# 미션 타입별 냉각 효과 범위 (mission_agent.py의 데이터 활용)
+mission_ranges = {
+    "나무 심기": {"min": 0.2, "expected": 0.35, "max": 0.5, "confidence": "high", "scope": "50m 반경"},
+    "옥상 녹화": {"min": 0.3, "expected": 0.55, "max": 0.8, "confidence": "medium", "scope": "옥상+주변 10m"},
+    "쿨페이브먼트": {"min": 0.2, "expected": 0.35, "max": 0.5, "confidence": "high", "scope": "시공 면적 내"},
+    "수경시설": {"min": 0.4, "expected": 0.55, "max": 0.7, "confidence": "medium", "scope": "주변 30m"},
+    "그늘막": {"min": 0.2, "expected": 0.3, "max": 0.4, "confidence": "medium", "scope": "그늘막 아래"}
+}
+
+col_uncertainty1, col_uncertainty2 = st.columns([2, 1])
+
+with col_uncertainty1:
+    # 불확실성 범위 차트
+    fig_uncertainty = go.Figure()
+
+    missions = list(mission_ranges.keys())
+    mins = [mission_ranges[m]["min"] for m in missions]
+    expected = [mission_ranges[m]["expected"] for m in missions]
+    maxs = [mission_ranges[m]["max"] for m in missions]
+    confidences = [mission_ranges[m]["confidence"] for m in missions]
+
+    # 신뢰도별 색상
+    confidence_colors = {
+        "high": "rgba(76, 205, 196, 0.3)",  # 청록색
+        "medium": "rgba(255, 184, 77, 0.3)"  # 주황색
+    }
+
+    # 범위 밴드 (fill)
+    for i, mission in enumerate(missions):
+        color = confidence_colors[confidences[i]]
+
+        fig_uncertainty.add_trace(go.Scatter(
+            x=[mission, mission],
+            y=[mins[i], maxs[i]],
+            mode='lines',
+            line=dict(color=color.replace("0.3", "0.6"), width=20),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+
+    # 기댓값 포인트
+    fig_uncertainty.add_trace(go.Scatter(
+        x=missions,
+        y=expected,
+        mode='markers+text',
+        marker=dict(size=15, color='#1e3c72', symbol='diamond'),
+        text=[f"{e:.2f}°C" for e in expected],
+        textposition="top center",
+        name='기댓값',
+        hovertemplate='<b>%{x}</b><br>기댓값: %{y:.2f}°C<extra></extra>'
+    ))
+
+    # 최소/최대 선
+    fig_uncertainty.add_trace(go.Scatter(
+        x=missions,
+        y=mins,
+        mode='markers',
+        marker=dict(size=8, color='rgba(255, 107, 107, 0.7)', symbol='line-ew'),
+        name='최소 효과',
+        hovertemplate='최소: %{y:.2f}°C<extra></extra>'
+    ))
+
+    fig_uncertainty.add_trace(go.Scatter(
+        x=missions,
+        y=maxs,
+        mode='markers',
+        marker=dict(size=8, color='rgba(76, 205, 196, 0.7)', symbol='line-ew'),
+        name='최대 효과',
+        hovertemplate='최대: %{y:.2f}°C<extra></extra>'
+    ))
+
+    fig_uncertainty.update_layout(
+        title="미션 타입별 냉각 효과 범위 (보수적 추정)",
+        yaxis_title="온도 감소 (°C)",
+        height=400,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.5, xanchor="center")
+    )
+
+    st.plotly_chart(fig_uncertainty, use_container_width=True)
+
+with col_uncertainty2:
+    st.markdown("##### 📌 신뢰도 범례")
+
+    st.markdown("""
+    <div style='background: rgba(76, 205, 196, 0.2); padding: 10px; border-radius: 8px; margin-bottom: 10px;'>
+        <b>🟢 높은 신뢰도 (High)</b><br>
+        <small>국내외 연구 데이터 풍부</small>
+    </div>
+    <div style='background: rgba(255, 184, 77, 0.2); padding: 10px; border-radius: 8px;'>
+        <b>🟡 중간 신뢰도 (Medium)</b><br>
+        <small>사례 있으나 변동성 큼</small>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("##### 🔍 적용 범위")
+    for mission, data in mission_ranges.items():
+        st.caption(f"**{mission}**: {data['scope']}")
+
+    st.info("""
+    ℹ️ **알아두세요**
+    - 범위는 최적 조건 가정
+    - 실제 효과는 유지관리에 따라 변동
+    - 측정 오차: ±0.3°C
+    """)
 
 st.markdown("---")
 

@@ -16,6 +16,7 @@ build/
 # Environment
 .env
 .env.local
+.streamlit/secrets.toml
 
 # Database
 *.db

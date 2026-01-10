@@ -12,9 +12,65 @@ from datetime import datetime
 import httpx
 import os
 from dotenv import load_dotenv
+import plotly.express as px
+import plotly.graph_objects as go
 
 # .env 파일 로드
 load_dotenv()
+
+# ============== FastAPI Backend Configuration ==============
+FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8020")
+
+
+# ============== FastAPI 호출 함수 ==============
+@st.cache_data(ttl=60)  # 1분 캐시
+def fetch_activity_feed(limit: int = 15):
+    """활동 피드 조회"""
+    try:
+        response = httpx.get(f"{FASTAPI_BASE_URL}/api/citizen/activity-feed", params={"limit": limit}, timeout=10.0)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"활동 피드 조회 실패: {e}")
+        return []
+
+
+@st.cache_data(ttl=300)  # 5분 캐시
+def fetch_weekly_challenges():
+    """주간 챌린지 조회"""
+    try:
+        response = httpx.get(f"{FASTAPI_BASE_URL}/api/citizen/challenges", timeout=10.0)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"챌린지 조회 실패: {e}")
+        return []
+
+
+@st.cache_data(ttl=300)  # 5분 캐시
+def fetch_leaderboard(limit: int = 10):
+    """랭킹 조회"""
+    try:
+        response = httpx.get(f"{FASTAPI_BASE_URL}/api/citizen/leaderboard", params={"limit": limit}, timeout=10.0)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"랭킹 조회 실패: {e}")
+        return []
+
+
+@st.cache_data(ttl=600)  # 10분 캐시
+def fetch_badges(user_id: int | None = None):
+    """배지 조회"""
+    try:
+        params = {"user_id": user_id} if user_id else {}
+        response = httpx.get(f"{FASTAPI_BASE_URL}/api/citizen/badges", params=params, timeout=10.0)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"배지 조회 실패: {e}")
+        return []
+
 
 # ============== Page Config ==============
 st.set_page_config(
@@ -27,26 +83,421 @@ st.set_page_config(
 # ============== Custom CSS ==============
 st.markdown("""
 <style>
+    /* 헤더 스타일 */
     .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1E88E5;
+        font-size: 3rem;
+        font-weight: 800;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         margin-bottom: 0.5rem;
+        text-align: center;
     }
     .sub-header {
-        font-size: 1.2rem;
-        color: #666;
+        font-size: 1.3rem;
+        color: #555;
         margin-bottom: 2rem;
+        text-align: center;
     }
-    .metric-card {
+
+    /* 히어로 배너 */
+    .hero-banner {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        color: white;
+        text-align: center;
+        margin-bottom: 2rem;
+        box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+    }
+    .hero-title {
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+    }
+    .hero-subtitle {
+        font-size: 1.2rem;
+        opacity: 0.95;
+    }
+
+    /* 메트릭 카드 */
+    .big-metric {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        text-align: center;
+        border-left: 5px solid;
+        transition: transform 0.2s;
+    }
+    .big-metric:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    }
+    .metric-value {
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin: 0.5rem 0;
+    }
+    .metric-label {
+        font-size: 0.9rem;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    .metric-icon {
+        font-size: 2rem;
+        margin-bottom: 0.5rem;
+    }
+
+    /* 열섬 강도 색상 */
+    .heat-critical { color: #d32f2f; border-color: #d32f2f; }
+    .heat-high { color: #f57c00; border-color: #f57c00; }
+    .heat-medium { color: #fbc02d; border-color: #fbc02d; }
+    .heat-low { color: #388e3c; border-color: #388e3c; }
+
+    /* 사이드바 개선 */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
+    }
+
+    /* 탭 스타일 */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: white;
         padding: 1rem;
         border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #f0f2f6;
+        border-radius: 8px 8px 0 0;
+        padding: 12px 24px;
+        font-weight: 600;
+        font-size: 1rem;
+        transition: all 0.3s;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        background-color: #e0e5f0;
+        transform: translateY(-2px);
+    }
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
     }
-    .heat-high { color: #ff4444; font-weight: bold; }
-    .heat-medium { color: #ffaa00; font-weight: bold; }
-    .heat-low { color: #44aa44; font-weight: bold; }
+
+    /* 시민참여 요약 카드 */
+    .citizen-summary {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        padding: 1.5rem;
+        border-radius: 12px;
+        color: white;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 15px rgba(240, 147, 251, 0.3);
+    }
+    .citizen-summary-title {
+        font-size: 1.3rem;
+        font-weight: 700;
+        margin-bottom: 1rem;
+    }
+    .citizen-stats {
+        display: flex;
+        justify-content: space-around;
+        gap: 1rem;
+    }
+    .citizen-stat-item {
+        text-align: center;
+    }
+    .citizen-stat-value {
+        font-size: 2rem;
+        font-weight: 700;
+    }
+    .citizen-stat-label {
+        font-size: 0.85rem;
+        opacity: 0.9;
+    }
+
+    /* 미션 카드 */
+    .mission-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        margin-bottom: 1rem;
+        border-left: 5px solid #667eea;
+        transition: all 0.3s;
+    }
+    .mission-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    }
+    .mission-card-title {
+        font-size: 1.3rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+        color: #333;
+    }
+    .mission-card-meta {
+        display: flex;
+        gap: 1rem;
+        margin: 1rem 0;
+        flex-wrap: wrap;
+    }
+    .mission-card-tag {
+        background: #f0f2f6;
+        padding: 0.3rem 0.8rem;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+    .mission-card-cta {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 0.8rem 2rem;
+        border-radius: 25px;
+        font-weight: 700;
+        font-size: 1.1rem;
+        border: none;
+        cursor: pointer;
+        transition: all 0.3s;
+        width: 100%;
+        margin-top: 1rem;
+    }
+    .mission-card-cta:hover {
+        transform: scale(1.05);
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    }
+
+    /* 챌린지 카드 */
+    .challenge-card {
+        background: linear-gradient(135deg, #ffeaa7 0%, #fdcb6e 100%);
+        padding: 1.5rem;
+        border-radius: 12px;
+        color: #2d3436;
+        margin-bottom: 1rem;
+        box-shadow: 0 4px 15px rgba(253, 203, 110, 0.3);
+    }
+    .challenge-title {
+        font-size: 1.2rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+    }
+    .challenge-desc {
+        font-size: 0.9rem;
+        opacity: 0.9;
+        margin-bottom: 1rem;
+    }
+    .progress-bar {
+        background: rgba(255,255,255,0.3);
+        border-radius: 10px;
+        height: 20px;
+        overflow: hidden;
+        margin: 0.5rem 0;
+    }
+    .progress-fill {
+        background: linear-gradient(90deg, #00b894 0%, #00cec9 100%);
+        height: 100%;
+        transition: width 0.3s;
+        border-radius: 10px;
+    }
+
+    /* 활동 피드 */
+    .activity-feed {
+        background: white;
+        padding: 0.8rem;
+        border-radius: 8px;
+        margin-bottom: 0.5rem;
+        border-left: 3px solid #74b9ff;
+        font-size: 0.9rem;
+        transition: all 0.2s;
+    }
+    .activity-feed:hover {
+        transform: translateX(5px);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .activity-time {
+        color: #999;
+        font-size: 0.75rem;
+    }
+
+    /* 랭킹 카드 */
+    .rank-card {
+        background: white;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 0.5rem;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        transition: all 0.2s;
+    }
+    .rank-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .rank-number {
+        font-size: 1.5rem;
+        font-weight: 700;
+        width: 40px;
+        text-align: center;
+    }
+    .rank-gold { color: #f39c12; }
+    .rank-silver { color: #95a5a6; }
+    .rank-bronze { color: #cd7f32; }
+
+    /* 배지 카드 */
+    .badge-card {
+        background: white;
+        padding: 1rem;
+        border-radius: 12px;
+        text-align: center;
+        transition: all 0.3s;
+        border: 2px solid #e0e0e0;
+        height: 220px;  /* 고정 높이 */
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;  /* 상하 균등 배치 */
+        align-items: center;
+    }
+    .badge-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+    }
+    .badge-card.earned {
+        background: linear-gradient(135deg, #ffeaa7 0%, #fdcb6e 100%);
+        border-color: #fdcb6e;
+    }
+    .badge-card.locked {
+        opacity: 0.5;
+        filter: grayscale(80%);
+    }
+    .badge-icon {
+        font-size: 2.5rem;  /* 크기 약간 줄임 */
+        margin-bottom: 0.3rem;
+        line-height: 1;
+    }
+    .badge-name {
+        font-size: 0.9rem;
+        font-weight: 700;
+        margin-bottom: 0.2rem;
+        color: #333;
+        line-height: 1.2;
+        max-height: 2.4em;  /* 2줄 제한 */
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+    }
+    .badge-desc {
+        font-size: 0.7rem;
+        color: #666;
+        margin-bottom: 0.2rem;
+        line-height: 1.3;
+        max-height: 3.9em;  /* 3줄 제한 */
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+    }
+    .badge-requirement {
+        font-size: 0.65rem;
+        color: #999;
+        font-style: italic;
+        line-height: 1.2;
+        margin-bottom: 0.3rem;
+    }
+    .badge-points {
+        background: #667eea;
+        color: white;
+        padding: 0.2rem 0.5rem;
+        border-radius: 10px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        margin-top: auto;  /* 하단에 고정 */
+        display: inline-block;
+    }
+
+    /* 로딩 스켈레톤 */
+    .skeleton {
+        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+        background-size: 200% 100%;
+        animation: loading 1.5s ease-in-out infinite;
+        border-radius: 8px;
+    }
+    @keyframes loading {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+    }
+    .skeleton-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin-bottom: 1rem;
+    }
+    .skeleton-line {
+        height: 16px;
+        margin-bottom: 10px;
+        border-radius: 4px;
+    }
+    .skeleton-circle {
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+    }
+
+    /* 커스텀 로딩 스피너 */
+    .loading-spinner {
+        display: inline-block;
+        width: 50px;
+        height: 50px;
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #667eea;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 2rem auto;
+    }
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    /* 모바일 반응형 */
+    @media (max-width: 768px) {
+        .big-metric {
+            padding: 1rem;
+        }
+        .metric-value {
+            font-size: 1.5rem;
+        }
+        .hero-title {
+            font-size: 1.5rem;
+        }
+        .badge-card {
+            height: 200px;
+        }
+        .rank-card, .activity-feed, .challenge-card {
+            font-size: 0.85rem;
+        }
+        .mission-card {
+            padding: 1rem;
+        }
+    }
+    @media (max-width: 480px) {
+        .big-metric {
+            padding: 0.8rem;
+        }
+        .metric-value {
+            font-size: 1.2rem;
+        }
+        .hero-title {
+            font-size: 1.2rem;
+        }
+        .badge-card {
+            height: 180px;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -82,6 +533,10 @@ API_BASE_URL = os.getenv("CLIMATE_API_BASE_URL", "https://climate.gg.go.kr/ols/a
 @st.cache_data(ttl=300)
 def fetch_park_data(max_features: int = 200) -> list:
     """경기기후플랫폼에서 공원 데이터 조회"""
+    # API 키가 없으면 빈 데이터 반환 (Mock 모드)
+    if not API_KEY or API_KEY == "your_api_key_here":
+        return []
+
     try:
         params = {
             "apiKey": API_KEY,
@@ -98,6 +553,12 @@ def fetch_park_data(max_features: int = 200) -> list:
             response.raise_for_status()
             data = response.json()
             return data.get("features", [])
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 403:
+            st.error("⚠️ API 인증 실패: CLIMATE_API_KEY를 .env 파일에 올바르게 설정해주세요.")
+        else:
+            st.warning(f"API 호출 실패 (HTTP {e.response.status_code}): {e}")
+        return []
     except Exception as e:
         st.warning(f"API 호출 실패: {e}")
         return []
@@ -272,17 +733,8 @@ with st.sidebar:
     st.title("Urban Cooling Farm")
     st.markdown("---")
 
-    # 페이지 선택
-    page = st.radio(
-        "메뉴",
-        ["🗺️ 열섬 현황 지도", "📊 대시보드", "🎯 미션 현황", "ℹ️ 정보"],
-        index=0
-    )
-
-    st.markdown("---")
-
     # 필터 옵션
-    st.subheader("필터")
+    st.subheader("🔍 필터")
     district_filter = st.selectbox(
         "지역 선택",
         ["전체"] + DISTRICT_LIST
@@ -298,6 +750,77 @@ with st.sidebar:
 
     st.markdown("---")
 
+    # 알림 센터
+    st.subheader("🔔 알림 센터")
+
+    # 알림 더미 데이터
+    notifications = [
+        {
+            "id": 1,
+            "type": "success",
+            "icon": "🎉",
+            "title": "미션 완료!",
+            "message": "수원시 가로수 심기 미션을 완료했습니다. +50P",
+            "time": "방금 전",
+            "read": False
+        },
+        {
+            "id": 2,
+            "type": "info",
+            "icon": "📢",
+            "title": "새로운 챌린지",
+            "message": "이번 주 챌린지가 시작되었습니다!",
+            "time": "1시간 전",
+            "read": False
+        },
+        {
+            "id": 3,
+            "type": "badge",
+            "icon": "🏅",
+            "title": "배지 획득!",
+            "message": "초보 활동가 배지를 획득했습니다!",
+            "time": "3시간 전",
+            "read": True
+        },
+        {
+            "id": 4,
+            "type": "level",
+            "icon": "⭐",
+            "title": "레벨 업!",
+            "message": "축하합니다! 레벨 8에 도달했습니다!",
+            "time": "어제",
+            "read": True
+        }
+    ]
+
+    # 읽지 않은 알림 개수
+    unread_count = sum(1 for n in notifications if not n['read'])
+    if unread_count > 0:
+        st.markdown(f"**새 알림: {unread_count}개**")
+
+    # 알림 표시
+    for notif in notifications[:3]:  # 최근 3개만 표시
+        bg_color = "#fff3cd" if not notif['read'] else "#f8f9fa"
+        st.markdown(f"""
+        <div style='background: {bg_color}; padding: 0.8rem; border-radius: 8px; margin-bottom: 0.5rem;
+                    border-left: 3px solid #667eea; font-size: 0.85rem;'>
+            <div style='font-weight: 600; margin-bottom: 0.2rem;'>
+                {notif['icon']} {notif['title']}
+            </div>
+            <div style='color: #666; font-size: 0.8rem; margin-bottom: 0.3rem;'>
+                {notif['message']}
+            </div>
+            <div style='color: #999; font-size: 0.75rem;'>
+                {notif['time']}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    if len(notifications) > 3:
+        st.caption(f"외 {len(notifications) - 3}개의 알림 더보기")
+
+    st.markdown("---")
+
     # 데이터 새로고침 버튼
     if st.button("🔄 데이터 새로고침"):
         st.cache_data.clear()
@@ -306,10 +829,50 @@ with st.sidebar:
     st.caption(f"마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
 
+# ============== 시민참여 요약 카드 (전역) ==============
+def render_citizen_summary():
+    """모든 페이지 상단에 표시되는 시민참여 요약"""
+    st.markdown("""
+    <div class='citizen-summary'>
+        <div class='citizen-summary-title'>👤 내 활동 현황</div>
+        <div class='citizen-stats'>
+            <div class='citizen-stat-item'>
+                <div class='citizen-stat-value'>1,250</div>
+                <div class='citizen-stat-label'>획득 포인트</div>
+            </div>
+            <div class='citizen-stat-item'>
+                <div class='citizen-stat-value'>Lv.5</div>
+                <div class='citizen-stat-label'>현재 레벨</div>
+            </div>
+            <div class='citizen-stat-item'>
+                <div class='citizen-stat-value'>12</div>
+                <div class='citizen-stat-label'>완료 미션</div>
+            </div>
+            <div class='citizen-stat-item'>
+                <div class='citizen-stat-value'>-2.3°C</div>
+                <div class='citizen-stat-label'>총 냉각 기여</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 # ============== Main Content ==============
-if page == "🗺️ 열섬 현황 지도":
-    st.markdown('<p class="main-header">🌡️ 경기도 열섬 현황 지도</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">실시간 도시 열섬 모니터링 및 냉각 우선지역 분석</p>', unsafe_allow_html=True)
+# 시민참여 요약 카드 표시
+render_citizen_summary()
+
+# 탭 기반 네비게이션
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🌡️ 열섬 현황 지도", "📊 냉각 효과 대시보드", "👥 시민 참여", "👤 내 프로필", "ℹ️ 정보"])
+
+# ============== 탭 1: 열섬 현황 지도 ==============
+with tab1:
+    # 히어로 배너
+    st.markdown("""
+    <div class='hero-banner'>
+        <div class='hero-title'>🌡️ 경기도 열섬 현황 지도</div>
+        <div class='hero-subtitle'>실시간 도시 열섬 모니터링 및 냉각 우선지역 분석</div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # 데이터 로드 (캐시됨)
     district_param = None if district_filter == "전체" else district_filter
@@ -318,46 +881,69 @@ if page == "🗺️ 열섬 현황 지도":
     # 강도 필터 적용
     heat_data = [d for d in heat_data if d["heat_island_intensity"] >= intensity_filter]
 
-    # 상단 메트릭
+    # 상단 핵심 지표 (큰 메트릭 카드)
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric(
-            label="모니터링 지점",
-            value=f"{len(heat_data)}개",
-            delta=None
-        )
+        st.markdown(f"""
+        <div class='big-metric' style='border-color: #667eea;'>
+            <div class='metric-icon'>📍</div>
+            <div class='metric-value'>{len(heat_data)}</div>
+            <div class='metric-label'>모니터링 지점</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     with col2:
         if heat_data:
             avg_temp = sum(d["temperature"] for d in heat_data) / len(heat_data)
             avg_intensity = sum(d["heat_island_intensity"] for d in heat_data) / len(heat_data)
-            st.metric(
-                label="평균 온도",
-                value=f"{avg_temp:.1f}°C",
-                delta=f"+{avg_intensity:.1f}°C"
-            )
+            heat_class = "heat-critical" if avg_intensity >= 2.0 else "heat-high" if avg_intensity >= 1.5 else "heat-medium"
+            st.markdown(f"""
+            <div class='big-metric {heat_class}'>
+                <div class='metric-icon'>🌡️</div>
+                <div class='metric-value'>{avg_temp:.1f}°C</div>
+                <div class='metric-label'>평균 온도 (+{avg_intensity:.1f}°C)</div>
+            </div>
+            """, unsafe_allow_html=True)
         else:
-            st.metric(label="평균 온도", value="N/A")
+            st.markdown("""
+            <div class='big-metric' style='border-color: #ccc;'>
+                <div class='metric-icon'>🌡️</div>
+                <div class='metric-value'>N/A</div>
+                <div class='metric-label'>평균 온도</div>
+            </div>
+            """, unsafe_allow_html=True)
 
     with col3:
         if heat_data:
             max_intensity = max(d["heat_island_intensity"] for d in heat_data)
-            st.metric(
-                label="최대 열섬 강도",
-                value=f"+{max_intensity:.1f}°C",
-                delta="심각" if max_intensity >= 2.0 else "주의"
-            )
+            heat_class = "heat-critical" if max_intensity >= 2.0 else "heat-high"
+            st.markdown(f"""
+            <div class='big-metric {heat_class}'>
+                <div class='metric-icon'>⚠️</div>
+                <div class='metric-value'>+{max_intensity:.1f}°C</div>
+                <div class='metric-label'>최대 열섬 강도</div>
+            </div>
+            """, unsafe_allow_html=True)
         else:
-            st.metric(label="최대 열섬 강도", value="N/A")
+            st.markdown("""
+            <div class='big-metric' style='border-color: #ccc;'>
+                <div class='metric-icon'>⚠️</div>
+                <div class='metric-value'>N/A</div>
+                <div class='metric-label'>최대 열섬 강도</div>
+            </div>
+            """, unsafe_allow_html=True)
 
     with col4:
         critical_count = len([d for d in heat_data if d["heat_island_intensity"] >= 2.0])
-        st.metric(
-            label="심각 지역",
-            value=f"{critical_count}개",
-            delta="즉시 조치 필요" if critical_count > 0 else "양호"
-        )
+        critical_class = "heat-critical" if critical_count > 0 else "heat-low"
+        st.markdown(f"""
+        <div class='big-metric {critical_class}'>
+            <div class='metric-icon'>🚨</div>
+            <div class='metric-value'>{critical_count}</div>
+            <div class='metric-label'>심각 지역 (≥2.0°C)</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -407,21 +993,54 @@ if page == "🗺️ 열섬 현황 지도":
         )
 
 
-elif page == "📊 대시보드":
-    st.markdown('<p class="main-header">📊 냉각 효과 대시보드</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">쿨링팜 프로젝트 성과 및 효과 분석</p>', unsafe_allow_html=True)
+# ============== 탭 2: 냉각 효과 대시보드 ==============
+with tab2:
+    # 히어로 배너
+    st.markdown("""
+    <div class='hero-banner'>
+        <div class='hero-title'>📊 냉각 효과 대시보드</div>
+        <div class='hero-subtitle'>쿨링팜 프로젝트 성과 및 효과 분석</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # Mock 통계 데이터
+    # Mock 통계 데이터 (큰 메트릭 카드)
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("총 쿨링스팟", "24개", "+3")
+        st.markdown("""
+        <div class='big-metric' style='border-color: #4ecdc4;'>
+            <div class='metric-icon'>🌳</div>
+            <div class='metric-value'>24</div>
+            <div class='metric-label'>총 쿨링스팟 (+3)</div>
+        </div>
+        """, unsafe_allow_html=True)
+
     with col2:
-        st.metric("완료된 미션", "156개", "+12")
+        st.markdown("""
+        <div class='big-metric' style='border-color: #95e1d3;'>
+            <div class='metric-icon'>✅</div>
+            <div class='metric-value'>156</div>
+            <div class='metric-label'>완료된 미션 (+12)</div>
+        </div>
+        """, unsafe_allow_html=True)
+
     with col3:
-        st.metric("예상 냉각 효과", "-1.2°C", "-0.3°C")
+        st.markdown("""
+        <div class='big-metric heat-low'>
+            <div class='metric-icon'>❄️</div>
+            <div class='metric-value'>-1.2°C</div>
+            <div class='metric-label'>예상 냉각 효과</div>
+        </div>
+        """, unsafe_allow_html=True)
+
     with col4:
-        st.metric("참여 시민", "1,247명", "+89")
+        st.markdown("""
+        <div class='big-metric' style='border-color: #f38181;'>
+            <div class='metric-icon'>👥</div>
+            <div class='metric-value'>1,247</div>
+            <div class='metric-label'>참여 시민 (+89)</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -434,7 +1053,26 @@ elif page == "📊 대시보드":
             "월": ["8월", "9월", "10월", "11월", "12월"],
             "완료 미션": [23, 35, 42, 38, 18]
         })
-        st.bar_chart(chart_data.set_index("월"))
+
+        # Plotly 인터랙티브 차트
+        fig = px.bar(
+            chart_data,
+            x="월",
+            y="완료 미션",
+            color="완료 미션",
+            color_continuous_scale="Blues",
+            labels={"완료 미션": "완료 미션 수"},
+            text="완료 미션"
+        )
+        fig.update_traces(textposition='outside')
+        fig.update_layout(
+            showlegend=False,
+            height=350,
+            margin=dict(l=0, r=0, t=0, b=0),
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)'
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     with col_right:
         st.subheader("🌡️ 지역별 열섬 강도")
@@ -443,8 +1081,27 @@ elif page == "📊 대시보드":
         intensity_df = pd.DataFrame({
             "지역": [d["district"] for d in heat_data],
             "강도": [d["heat_island_intensity"] for d in heat_data]
-        })
-        st.bar_chart(intensity_df.set_index("지역"))
+        }).sort_values("강도", ascending=False).head(10)  # 상위 10개만
+
+        # Plotly 인터랙티브 차트
+        fig = px.bar(
+            intensity_df,
+            x="지역",
+            y="강도",
+            color="강도",
+            color_continuous_scale="Reds",
+            labels={"강도": "열섬 강도 (°C)"},
+            text="강도"
+        )
+        fig.update_traces(texttemplate='%{text:.1f}°C', textposition='outside')
+        fig.update_layout(
+            showlegend=False,
+            height=350,
+            margin=dict(l=0, r=0, t=0, b=0),
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)'
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("---")
 
@@ -456,12 +1113,110 @@ elif page == "📊 대시보드":
         "진행중": [12, 8, 5, 7, 10],
         "대기": [8, 5, 3, 4, 6]
     })
-    st.dataframe(mission_types, use_container_width=True, hide_index=True)
+
+    # Plotly 누적 막대 차트
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name='완료',
+        x=mission_types["미션 타입"],
+        y=mission_types["완료"],
+        marker_color='#00b894',
+        text=mission_types["완료"],
+        textposition='inside'
+    ))
+    fig.add_trace(go.Bar(
+        name='진행중',
+        x=mission_types["미션 타입"],
+        y=mission_types["진행중"],
+        marker_color='#74b9ff',
+        text=mission_types["진행중"],
+        textposition='inside'
+    ))
+    fig.add_trace(go.Bar(
+        name='대기',
+        x=mission_types["미션 타입"],
+        y=mission_types["대기"],
+        marker_color='#dfe6e9',
+        text=mission_types["대기"],
+        textposition='inside'
+    ))
+    fig.update_layout(
+        barmode='stack',
+        height=400,
+        margin=dict(l=0, r=0, t=0, b=0),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
-elif page == "🎯 미션 현황":
-    st.markdown('<p class="main-header">🎯 AI 생성 미션 현황</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">도시 냉각을 위한 시민 참여 미션</p>', unsafe_allow_html=True)
+# ============== 탭 3: 시민 참여 ==============
+with tab3:
+    # 히어로 배너
+    st.markdown("""
+    <div class='hero-banner'>
+        <div class='hero-title'>👥 시민 참여 센터</div>
+        <div class='hero-subtitle'>함께 만드는 시원한 경기도! 미션에 참여하고 포인트를 모으세요</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 내 활동 상세 대시보드
+    st.markdown("### 🏆 내 활동 상세")
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    with col1:
+        st.markdown("""
+        <div class='big-metric' style='border-color: #f093fb;'>
+            <div class='metric-icon'>💎</div>
+            <div class='metric-value'>1,250</div>
+            <div class='metric-label'>총 포인트</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("""
+        <div class='big-metric' style='border-color: #feca57;'>
+            <div class='metric-icon'>🌟</div>
+            <div class='metric-value'>Lv.5</div>
+            <div class='metric-label'>현재 레벨</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col3:
+        st.markdown("""
+        <div class='big-metric' style='border-color: #48dbfb;'>
+            <div class='metric-icon'>✅</div>
+            <div class='metric-value'>12</div>
+            <div class='metric-label'>완료 미션</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col4:
+        st.markdown("""
+        <div class='big-metric heat-low'>
+            <div class='metric-icon'>❄️</div>
+            <div class='metric-value'>-2.3°C</div>
+            <div class='metric-label'>냉각 기여</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col5:
+        st.markdown("""
+        <div class='big-metric' style='border-color: #1dd1a1;'>
+            <div class='metric-icon'>🌳</div>
+            <div class='metric-value'>45</div>
+            <div class='metric-label'>심은 나무</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("---")
 
     # 미션 필터
     col1, col2, col3 = st.columns(3)
@@ -496,6 +1251,7 @@ elif page == "🎯 미션 현황":
             "points": 100,
             "difficulty": 4,
             "cooling_effect": 0.5,
+            "progress": 65,  # 진행률 (%)
             "ai_reason": "부천시는 인구 밀집 지역으로 건물 옥상 온도가 주변보다 5°C 이상 높습니다. 옥상 녹화로 건물 냉방 에너지 절감 효과도 기대됩니다."
         },
         {
@@ -529,6 +1285,7 @@ elif page == "🎯 미션 현황":
             "points": 30,
             "difficulty": 1,
             "cooling_effect": 0.1,
+            "progress": 35,  # 진행률 (%)
             "ai_reason": "안양역 인근 버스정류장의 대기 시민들이 직사광선에 노출되어 있습니다. 그늘막 설치로 체감온도를 3°C 이상 낮출 수 있습니다."
         },
         {
@@ -544,7 +1301,139 @@ elif page == "🎯 미션 현황":
         }
     ]
 
-    # 미션 카드 표시
+    # === Phase 1: 주간 챌린지 ===
+    st.markdown("### 🏆 이번 주 챌린지")
+    challenges = fetch_weekly_challenges()
+
+    if challenges:
+        for challenge in challenges:
+            progress_pct = challenge['progress_percentage']
+            st.markdown(f"""
+            <div class='challenge-card'>
+                <div class='challenge-title'>{challenge['title']}</div>
+                <div class='challenge-desc'>{challenge['description']}</div>
+                <div class='progress-bar'>
+                    <div class='progress-fill' style='width: {progress_pct}%'></div>
+                </div>
+                <div style='display: flex; justify-content: space-between; margin-top: 0.5rem;'>
+                    <span><strong>{challenge['current_progress']}/{challenge['goal_count']}</strong> 완료</span>
+                    <span style='background: rgba(0,0,0,0.1); padding: 0.2rem 0.5rem; border-radius: 5px;'>
+                        보상: <strong>{challenge['reward_points']}P</strong>
+                    </span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.info("⏳ FastAPI 백엔드를 실행하면 주간 챌린지를 볼 수 있습니다.")
+
+    st.markdown("---")
+
+    # === Phase 2: 배지 컬렉션 ===
+    st.markdown("### 🏅 배지 컬렉션")
+
+    # 더미 user_id (실제로는 로그인 시스템에서 가져와야 함)
+    current_user_id = 1
+    badges = fetch_badges(user_id=current_user_id)
+
+    if badges:
+        # 획득/미획득 배지 분류
+        earned_badges = [b for b in badges if b['is_earned']]
+        locked_badges = [b for b in badges if not b['is_earned']]
+
+        # 상태 표시
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"**획득한 배지:** {len(earned_badges)}/{len(badges)}")
+        with col2:
+            completion_pct = int((len(earned_badges) / len(badges)) * 100) if badges else 0
+            st.markdown(f"**달성률:** {completion_pct}%")
+
+        # 배지 그리드 (4열)
+        cols_per_row = 5
+        all_badges_sorted = earned_badges + locked_badges  # 획득한 배지 먼저 표시
+
+        for i in range(0, len(all_badges_sorted), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for j, badge in enumerate(all_badges_sorted[i:i+cols_per_row]):
+                with cols[j]:
+                    card_class = "badge-card earned" if badge['is_earned'] else "badge-card locked"
+                    st.markdown(f"""
+                    <div class='{card_class}'>
+                        <div class='badge-icon'>{badge['icon']}</div>
+                        <div class='badge-name'>{badge['name']}</div>
+                        <div class='badge-desc'>{badge['description']}</div>
+                        <div class='badge-requirement'>{badge['requirement']}</div>
+                        <div class='badge-points'>+{badge['points']}P</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+    else:
+        st.info("⏳ FastAPI 백엔드를 실행하면 배지 컬렉션을 볼 수 있습니다.")
+
+    st.markdown("---")
+
+    # === Phase 1: 2열 레이아웃 (활동 피드 + 랭킹) ===
+    col_feed, col_rank = st.columns(2)
+
+    with col_feed:
+        st.markdown("### 🔥 실시간 활동 피드")
+        activities = fetch_activity_feed(limit=10)
+
+        if activities:
+            for activity in activities:
+                # 액션 타입에 따른 아이콘
+                action_icons = {
+                    "mission_complete": "✅",
+                    "mission_start": "🚀",
+                    "level_up": "⬆️",
+                    "badge_earned": "🏅"
+                }
+                icon = action_icons.get(activity['action_type'], "📌")
+
+                # 시간 포맷팅
+                time_str = activity['created_at'][:16].replace("T", " ")
+
+                points_text = f"+{activity['points_earned']}P" if activity['points_earned'] > 0 else ""
+
+                st.markdown(f"""
+                <div class='activity-feed'>
+                    {icon} <strong>{activity['user_name']}</strong>님이 <strong>{activity['mission_title']}</strong> {points_text}
+                    <div class='activity-time'>{time_str}</div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("⏳ FastAPI 백엔드를 실행하면 실시간 활동을 볼 수 있습니다.")
+
+    with col_rank:
+        st.markdown("### 🏆 이번 주 TOP 10")
+        leaderboard = fetch_leaderboard(limit=10)
+
+        if leaderboard:
+            for entry in leaderboard:
+                rank = entry['rank']
+                rank_class = "rank-gold" if rank == 1 else "rank-silver" if rank == 2 else "rank-bronze" if rank == 3 else ""
+
+                medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else ""
+
+                st.markdown(f"""
+                <div class='rank-card'>
+                    <div class='rank-number {rank_class}'>{medal or rank}</div>
+                    <div style='flex: 1;'>
+                        <strong>{entry['username']}</strong>
+                        <div style='font-size: 0.8rem; color: #666;'>
+                            Lv.{entry['level']} | {entry['total_points']}P | {entry['cooling_contribution']}°C 기여
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("⏳ FastAPI 백엔드를 실행하면 랭킹을 볼 수 있습니다.")
+
+    st.markdown("---")
+
+    # 추천 미션 섹션
+    st.markdown("### 🎯 추천 미션 (지금 참여하세요!)")
+
+    # 미션 카드 표시 (큰 카드 형태)
     for mission in mock_missions:
         # 필터 적용
         if status_filter != "전체" and mission["status"] != status_filter:
@@ -552,31 +1441,260 @@ elif page == "🎯 미션 현황":
         if type_filter != "전체" and mission["type"] != type_filter:
             continue
 
-        status_color = {"대기중": "🟡", "진행중": "🔵", "완료": "🟢"}
+        status_emoji = {"대기중": "🟡", "진행중": "🔵", "완료": "🟢"}
+        status_badge = f"{status_emoji.get(mission['status'], '⚪')} {mission['status']}"
 
-        with st.expander(f"{status_color.get(mission['status'], '⚪')} {mission['title']}", expanded=False):
-            col1, col2 = st.columns([2, 1])
+        # 미션 카드 HTML (진행률 바 포함)
+        if mission['status'] == "진행중" and mission.get('progress'):
+            progress_pct = mission['progress']
+            # 진행률 바가 있는 카드
+            st.markdown(f"""
+            <div class='mission-card'>
+                <div class='mission-card-title'>{mission['title']}</div>
+                <div class='mission-card-meta'>
+                    <span class='mission-card-tag'>📍 {mission['location']}</span>
+                    <span class='mission-card-tag'>{mission['type']}</span>
+                    <span class='mission-card-tag'>{status_badge}</span>
+                </div>
+                <p style='color: #666; margin: 1rem 0;'>
+                    <strong>🤖 AI 분석:</strong><br>
+                    {mission['ai_reason']}
+                </p>
+                <div style='margin-top: 1rem;'>
+                    <div style='display: flex; justify-content: space-between; margin-bottom: 0.3rem;'>
+                        <span style='font-size: 0.9rem; font-weight: 600;'>진행 상황</span>
+                        <span style='font-size: 0.9rem; color: #667eea;'><strong>{progress_pct}%</strong></span>
+                    </div>
+                    <div class='progress-bar'>
+                        <div class='progress-fill' style='width: {progress_pct}%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);'></div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            # 진행률 바가 없는 카드
+            st.markdown(f"""
+            <div class='mission-card'>
+                <div class='mission-card-title'>{mission['title']}</div>
+                <div class='mission-card-meta'>
+                    <span class='mission-card-tag'>📍 {mission['location']}</span>
+                    <span class='mission-card-tag'>{mission['type']}</span>
+                    <span class='mission-card-tag'>{status_badge}</span>
+                </div>
+                <p style='color: #666; margin: 1rem 0;'>
+                    <strong>🤖 AI 분석:</strong><br>
+                    {mission['ai_reason']}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
 
-            with col1:
-                st.markdown(f"**위치:** {mission['location']}")
-                st.markdown(f"**타입:** {mission['type']}")
-                st.markdown(f"**상태:** {mission['status']}")
-                st.markdown("---")
-                st.markdown("**🤖 AI 분석:**")
-                st.info(mission['ai_reason'])
+        # 메트릭과 CTA 버튼
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("💎 보상", f"{mission['points']}P")
+        with col2:
+            st.metric("⭐ 난이도", "⭐" * mission['difficulty'])
+        with col3:
+            st.metric("❄️ 냉각 효과", f"-{mission['cooling_effect']}°C")
+        with col4:
+            if mission['status'] == "대기중":
+                if st.button("✅ 지금 참여하기", key=f"join_{mission['id']}", type="primary", use_container_width=True):
+                    st.success("🎉 미션에 참여했습니다! 포인트를 획득했어요!")
+            elif mission['status'] == "진행중":
+                st.button("🔄 진행 중", key=f"progress_{mission['id']}", disabled=True, use_container_width=True)
+            else:
+                st.button("🟢 완료됨", key=f"done_{mission['id']}", disabled=True, use_container_width=True)
 
-            with col2:
-                st.metric("보상 포인트", f"{mission['points']}P")
-                st.metric("난이도", "⭐" * mission['difficulty'])
-                st.metric("예상 냉각 효과", f"-{mission['cooling_effect']}°C")
-
-                if mission['status'] == "대기중":
-                    if st.button("미션 참여", key=f"join_{mission['id']}"):
-                        st.success("미션에 참여했습니다!")
+        st.markdown("---")
 
 
-elif page == "ℹ️ 정보":
-    st.markdown('<p class="main-header">ℹ️ Urban Cooling Farm 정보</p>', unsafe_allow_html=True)
+# ============== 탭 4: 내 프로필 ==============
+with tab4:
+    # 히어로 배너
+    st.markdown("""
+    <div class='hero-banner'>
+        <div class='hero-title'>👤 내 프로필</div>
+        <div class='hero-subtitle'>활동 내역 및 통계를 확인하세요</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 더미 사용자 데이터 (실제로는 로그인 시스템에서 가져와야 함)
+    current_user_id = 1
+
+    # 사용자 기본 정보 카드
+    st.markdown("### 📝 기본 정보")
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col1:
+        st.markdown("""
+        <div style='text-align: center;'>
+            <div style='width: 120px; height: 120px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center;'>
+                <span style='font-size: 4rem; color: white;'>👤</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("""
+        <div style='padding: 1rem;'>
+            <h2 style='margin: 0; color: #333;'>김민준01</h2>
+            <p style='color: #666; margin: 0.5rem 0;'>📧 user001@example.com</p>
+            <p style='color: #666; margin: 0.5rem 0;'>📅 가입일: 2026-01-11</p>
+            <div style='display: flex; gap: 1rem; margin-top: 1rem;'>
+                <span style='background: #667eea; color: white; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.9rem;'>
+                    ⭐ Level 8
+                </span>
+                <span style='background: #fdcb6e; color: white; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.9rem;'>
+                    👑 VIP 회원
+                </span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col3:
+        if st.button("✏️ 프로필 수정", use_container_width=True):
+            st.info("프로필 수정 기능은 추후 구현 예정입니다.")
+
+    st.markdown("---")
+
+    # 활동 통계
+    st.markdown("### 📊 활동 통계")
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.markdown("""
+        <div class='big-metric' style='border-color: #667eea;'>
+            <div class='metric-icon'>🎯</div>
+            <div class='metric-value'>22</div>
+            <div class='metric-label'>완료한 미션</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("""
+        <div class='big-metric' style='border-color: #00b894;'>
+            <div class='metric-icon'>💎</div>
+            <div class='metric-value'>2,538</div>
+            <div class='metric-label'>총 포인트</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col3:
+        st.markdown("""
+        <div class='big-metric' style='border-color: #fd79a8;'>
+            <div class='metric-icon'>🌳</div>
+            <div class='metric-value'>94</div>
+            <div class='metric-label'>심은 나무</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col4:
+        st.markdown("""
+        <div class='big-metric' style='border-color: #74b9ff;'>
+            <div class='metric-icon'>❄️</div>
+            <div class='metric-value'>1.4°C</div>
+            <div class='metric-label'>냉각 기여도</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # 획득한 배지
+    st.markdown("### 🏅 획득한 배지")
+    badges = fetch_badges(user_id=current_user_id)
+    earned_badges = [b for b in badges if b['is_earned']] if badges else []
+
+    if earned_badges:
+        cols_per_row = 5
+        for i in range(0, len(earned_badges), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for j, badge in enumerate(earned_badges[i:i+cols_per_row]):
+                with cols[j]:
+                    st.markdown(f"""
+                    <div class='badge-card earned'>
+                        <div class='badge-icon'>{badge['icon']}</div>
+                        <div class='badge-name'>{badge['name']}</div>
+                        <div class='badge-desc'>{badge['description']}</div>
+                        <div class='badge-requirement'>{badge['requirement']}</div>
+                        <div class='badge-points'>+{badge['points']}P</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+    else:
+        st.info("아직 획득한 배지가 없습니다. 미션을 완료하고 배지를 모아보세요!")
+
+    st.markdown("---")
+
+    # 최근 활동 내역
+    st.markdown("### 📜 최근 활동 내역")
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        # 미션 완료 내역 (더미 데이터)
+        st.markdown("#### 🎯 완료한 미션")
+        recent_missions = [
+            {"title": "수원시 가로수 심기", "date": "2026-01-10", "points": 50},
+            {"title": "부천시 옥상 녹화 프로젝트", "date": "2026-01-08", "points": 100},
+            {"title": "시흥시 쿨페이브먼트 시공", "date": "2026-01-05", "points": 80},
+            {"title": "성남시 분당구 분수대 설치", "date": "2026-01-03", "points": 70},
+            {"title": "안양시 버스정류장 그늘막", "date": "2025-12-28", "points": 30},
+        ]
+
+        for mission in recent_missions:
+            st.markdown(f"""
+            <div class='activity-feed'>
+                ✅ <strong>{mission['title']}</strong> +{mission['points']}P
+                <div class='activity-time'>{mission['date']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    with col2:
+        # 레벨 진행도
+        st.markdown("#### ⭐ 레벨 진행도")
+        current_level = 8
+        current_xp = 2538
+        next_level_xp = 3000
+        progress_pct = int((current_xp / next_level_xp) * 100)
+
+        st.markdown(f"""
+        <div style='background: white; padding: 1.5rem; border-radius: 12px;'>
+            <div style='text-align: center; margin-bottom: 1rem;'>
+                <h2 style='margin: 0; color: #667eea;'>Level {current_level}</h2>
+                <p style='color: #666; font-size: 0.9rem; margin: 0.5rem 0;'>다음 레벨까지</p>
+                <p style='color: #333; font-weight: 700;'>{next_level_xp - current_xp}P 남음</p>
+            </div>
+            <div class='progress-bar'>
+                <div class='progress-fill' style='width: {progress_pct}%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);'></div>
+            </div>
+            <div style='text-align: center; margin-top: 0.5rem; font-size: 0.85rem; color: #666;'>
+                {current_xp} / {next_level_xp} XP
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 랭킹 정보
+        st.markdown("#### 🏆 내 순위")
+        st.markdown("""
+        <div style='background: white; padding: 1.5rem; border-radius: 12px; text-align: center;'>
+            <div style='font-size: 3rem; color: #f39c12;'>🥇</div>
+            <h2 style='margin: 0.5rem 0; color: #333;'>#1</h2>
+            <p style='color: #666; font-size: 0.9rem;'>전체 랭킹</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ============== 탭 5: 정보 ==============
+with tab5:
+    # 히어로 배너
+    st.markdown("""
+    <div class='hero-banner'>
+        <div class='hero-title'>ℹ️ Urban Cooling Farm 정보</div>
+        <div class='hero-subtitle'>시민이 가꾸는 텃밭으로 도시 열섬을 식히는 기후 케어 플랫폼</div>
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("""
     ## 프로젝트 소개

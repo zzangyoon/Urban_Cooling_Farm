@@ -21,6 +21,14 @@ class MissionType(str, enum.Enum):
     SHADE_STRUCTURE = "shade_structure"      # 그늘막 설치
 
 
+class ActionType(str, enum.Enum):
+    """활동 피드 액션 타입"""
+    MISSION_COMPLETE = "mission_complete"
+    MISSION_START = "mission_start"
+    LEVEL_UP = "level_up"
+    BADGE_EARNED = "badge_earned"
+
+
 class User(Base):
     """사용자 모델"""
     __tablename__ = "users"
@@ -30,11 +38,16 @@ class User(Base):
     email = Column(String(100), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     points = Column(Integer, default=0)  # 미션 완료 포인트
+    level = Column(Integer, default=1)  # 사용자 레벨
+    completed_missions_count = Column(Integer, default=0)  # 완료한 미션 수
+    cooling_contribution = Column(Float, default=0.0)  # 총 냉각 기여도 (°C)
+    trees_planted = Column(Integer, default=0)  # 심은 나무 수
     created_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
 
     # Relationships
     missions = relationship("Mission", back_populates="user")
+    activity_feeds = relationship("ActivityFeed", back_populates="user")
 
 
 class CoolingSpot(Base):
@@ -120,3 +133,80 @@ class EffectMeasurement(Base):
 
     # Relationships
     cooling_spot = relationship("CoolingSpot", back_populates="measurements")
+
+
+class ActivityFeed(Base):
+    """시민 활동 피드 모델"""
+    __tablename__ = "activity_feeds"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    action_type = Column(Enum(ActionType), nullable=False)
+    mission_title = Column(String(200), nullable=True)  # 미션 관련일 경우
+    points_earned = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # Relationships
+    user = relationship("User", back_populates="activity_feeds")
+
+
+class WeeklyChallenge(Base):
+    """주간 챌린지 모델"""
+    __tablename__ = "weekly_challenges"
+
+    id = Column(Integer, primary_key=True, index=True)
+    week_number = Column(Integer, nullable=False, index=True)  # 주차 (년도 + 주)
+    title = Column(String(200), nullable=False)
+    description = Column(Text)
+    goal_count = Column(Integer, nullable=False)  # 목표 수량
+    current_progress = Column(Integer, default=0)  # 현재 진행도
+    reward_points = Column(Integer, default=0)  # 보상 포인트
+    start_date = Column(DateTime, nullable=False)
+    end_date = Column(DateTime, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BadgeType(str, enum.Enum):
+    """배지 타입"""
+    FIRST_MISSION = "first_mission"  # 첫 미션 완료
+    MISSIONS_10 = "missions_10"  # 10개 미션 완료
+    MISSIONS_50 = "missions_50"  # 50개 미션 완료
+    MISSIONS_100 = "missions_100"  # 100개 미션 완료
+    TREE_LOVER = "tree_lover"  # 나무 50그루 심기
+    COOLING_HERO = "cooling_hero"  # 총 10°C 냉각 기여
+    LEVEL_5 = "level_5"  # 레벨 5 달성
+    LEVEL_10 = "level_10"  # 레벨 10 달성
+    WEEKLY_CHAMPION = "weekly_champion"  # 주간 챌린지 완료
+    GREEN_ROOF_MASTER = "green_roof_master"  # 옥상녹화 전문가
+
+
+class Badge(Base):
+    """배지 마스터 데이터"""
+    __tablename__ = "badges"
+
+    id = Column(Integer, primary_key=True, index=True)
+    badge_type = Column(Enum(BadgeType), unique=True, nullable=False)
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    icon = Column(String(10))  # 이모지
+    requirement = Column(String(200))  # 획득 조건 설명
+    points = Column(Integer, default=0)  # 배지 획득 시 보너스 포인트
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user_badges = relationship("UserBadge", back_populates="badge")
+
+
+class UserBadge(Base):
+    """사용자가 획득한 배지"""
+    __tablename__ = "user_badges"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    badge_id = Column(Integer, ForeignKey("badges.id"), nullable=False)
+    earned_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", backref="badges")
+    badge = relationship("Badge", back_populates="user_badges")
