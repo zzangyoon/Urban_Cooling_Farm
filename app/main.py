@@ -9,9 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.config import get_settings
-from app.models.database import Base, engine
+from app.models.database import Base, engine, SessionLocal
 from app.routers import climate_router, missions_router, cooling_spots_router, agent_router, effects_router
 from app.routers.citizen import router as citizen_router
+import os
 
 
 @asynccontextmanager
@@ -21,6 +22,28 @@ async def lifespan(app: FastAPI):
     try:
         Base.metadata.create_all(bind=engine)
         print("Database tables created successfully")
+
+        # Vercel 환경에서는 초기 데이터 자동 생성
+        if os.getenv("VERCEL"):
+            print("Vercel environment detected - initializing data...")
+            from app.init_citizen_data import (
+                create_dummy_users, create_activity_feed,
+                create_weekly_challenges, create_badges, assign_random_badges
+            )
+            db = SessionLocal()
+            try:
+                users = create_dummy_users(db, count=15)
+                create_activity_feed(db, users, count=30)
+                create_weekly_challenges(db)
+                create_badges(db)
+                assign_random_badges(db, users)
+                print("Initial data created successfully")
+            except Exception as init_error:
+                print(f"Warning: Data initialization failed: {init_error}")
+                db.rollback()
+            finally:
+                db.close()
+
     except Exception as e:
         # 데이터베이스 초기화 실패 시 경고 출력
         print(f"Warning: Database initialization failed: {e}")
