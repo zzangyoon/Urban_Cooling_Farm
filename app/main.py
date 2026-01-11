@@ -18,7 +18,13 @@ from app.routers.citizen import router as citizen_router
 async def lifespan(app: FastAPI):
     """앱 시작/종료 시 실행되는 이벤트"""
     # 시작 시: 테이블 생성
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("Database tables created successfully")
+    except Exception as e:
+        # 데이터베이스 초기화 실패 시 경고 출력
+        print(f"Warning: Database initialization failed: {e}")
+        print("App will continue with USE_MOCK_DATA mode")
     yield
     # 종료 시: 정리 작업 (필요시)
 
