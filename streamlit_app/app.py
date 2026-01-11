@@ -19,7 +19,8 @@ import plotly.graph_objects as go
 load_dotenv()
 
 # ============== FastAPI Backend Configuration ==============
-FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8020")
+# Streamlit Cloud 배포 시 Vercel URL 사용, 로컬 개발 시 localhost
+FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "https://urban-cooling-farm.vercel.app")
 
 
 # ============== FastAPI 호출 함수 ==============
@@ -850,7 +851,7 @@ def render_citizen_summary():
             </div>
             <div class='citizen-stat-item'>
                 <div class='citizen-stat-value'>-2.3°C</div>
-                <div class='citizen-stat-label'>총 냉각 기여</div>
+                <div class='citizen-stat-label'>냉각 기여</div>
             </div>
         </div>
     </div>
