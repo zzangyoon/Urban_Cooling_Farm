@@ -31,8 +31,8 @@ def fetch_activity_feed(limit: int = 15):
         response = httpx.get(f"{FASTAPI_BASE_URL}/api/citizen/activity-feed", params={"limit": limit}, timeout=10.0)
         response.raise_for_status()
         return response.json()
-    except Exception as e:
-        st.error(f"활동 피드 조회 실패: {e}")
+    except Exception:
+        # 에러 발생 시 빈 리스트 반환
         return []
 
 
@@ -43,8 +43,8 @@ def fetch_weekly_challenges():
         response = httpx.get(f"{FASTAPI_BASE_URL}/api/citizen/challenges", timeout=10.0)
         response.raise_for_status()
         return response.json()
-    except Exception as e:
-        st.error(f"챌린지 조회 실패: {e}")
+    except Exception:
+        # 에러 발생 시 빈 리스트 반환
         return []
 
 
@@ -55,8 +55,8 @@ def fetch_leaderboard(limit: int = 10):
         response = httpx.get(f"{FASTAPI_BASE_URL}/api/citizen/leaderboard", params={"limit": limit}, timeout=10.0)
         response.raise_for_status()
         return response.json()
-    except Exception as e:
-        st.error(f"랭킹 조회 실패: {e}")
+    except Exception:
+        # 에러 발생 시 빈 리스트 반환
         return []
 
 
@@ -68,8 +68,8 @@ def fetch_badges(user_id: int | None = None):
         response = httpx.get(f"{FASTAPI_BASE_URL}/api/citizen/badges", params=params, timeout=10.0)
         response.raise_for_status()
         return response.json()
-    except Exception as e:
-        st.error(f"배지 조회 실패: {e}")
+    except Exception:
+        # 에러 발생 시 빈 리스트 반환
         return []
 
 
